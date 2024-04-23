@@ -1,5 +1,4 @@
 import { Request } from "express";
-import { AuthUser } from "../..";
 
 
 export * from "./post";

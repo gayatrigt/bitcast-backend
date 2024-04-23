@@ -4,23 +4,24 @@ import { ethers } from "ethers";
 import dotenv from "dotenv";
 import jwt from "jsonwebtoken";
 import cors from "cors";
+import AWS from "aws-sdk";
 import morgan from "morgan";
 import multer from "multer";
-import { v4 as uuidv4 } from "uuid";
-import path from "path";
+// import { v4 as uuidv4 } from "uuid";
+// import path from "path";
 
 import {
-  AuthRequest,
   MediaSource,
   PostModel,
   UserModel,
   VoteModel,
   TopicModel,
   VoteType,
+  AuthRequest,
 } from "./schemas";
 import { BadRequestError, UnauthorizedError } from "./utils";
-import ShareModel, { ShareMedium } from "./schemas/share";
 import { AuthUser } from "..";
+import ShareModel, { ShareMedium } from "./schemas/share";
 
 dotenv.config();
 
@@ -52,6 +53,14 @@ app.use(express.json());
 app.use(express.static("/public"));
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static("uploads"));
+
+AWS.config.update({
+  accessKeyId: process.env.AWS_S3_ACCESS_KEY_ID,
+  secretAccessKey: process.env.AWS_S3_SECRET_ACCESS_KEY,
+  region: "eu-north-1",
+});
+
+const s3 = new AWS.S3();
 
 // Define the middleware function to verify JWT token
 function Auth(req: AuthRequest, res: Response, next: NextFunction) {
@@ -144,22 +153,23 @@ const upload = multer({
       cb(new Error("Unsupported file type"));
     }
   },
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      cb(null, "uploads");
-    },
-    filename: (req, file, cb) => {
-      const filename = uuidv4() + path.extname(file.originalname);
-      cb(null, filename);
-    },
-  }),
+  storage: multer.memoryStorage(),
+  // storage: multer.diskStorage({
+  //   destination: (req, file, cb) => {
+  //     cb(null, "uploads");
+  //   },
+  //   filename: (req, file, cb) => {
+  //     const filename = uuidv4() + path.extname(file.originalname);
+  //     cb(null, filename);
+  //   },
+  // }),
 });
 
 app.use("/ping", Auth, (req: AuthRequest, res: Response) => {
   res.send(`Hello! ${req.user.address}`);
 });
 
-app.post("/auth", async (req: Request, res: Response) => {
+app.post("/auth", async (req: AuthRequest, res: Response) => {
   interface SigninMessage {
     message: string;
     signature: string;
@@ -208,38 +218,55 @@ app.post("/auth", async (req: Request, res: Response) => {
 });
 
 // TODO: use transaction
+// delete file after upload to s3 or failed upload
 app.post(
   "/post",
   Auth,
   upload.single("media"),
   async (req: AuthRequest, res: Response) => {
-    console.log(req.body);
+    if (!req.file) return res.send("No file uploaded");
+    console.log(req.file);
     try {
-      // Update topic count or create topic
-      const topic = await TopicModel.findOneAndUpdate(
-        { title: req.body.topic },
-        {
-          $inc: { posts: 1 },
-        },
-        { new: true, upsert: true }
-      ).exec();
+      const params: AWS.S3.PutObjectRequest = {
+        Bucket: "bitcast/media",
+        Key: req.file?.originalname,
+        Body: req.file?.buffer,
+      };
 
-      const newPost = new PostModel({
-        topic_id: topic._id,
-        author_id: req.user.id,
-        caption: req.body.caption,
-        media_url: req.file?.path,
-        tiktok: `https://${req.body.tiktok.split("//").pop()}`,
-        media_source: MediaSource.UPLOAD,
-      });
-      const savedPost = await newPost.save();
+      s3.upload(params, async (err: unknown, data: any) => {
+        if (err) {
+          console.error(err);
+          return res.status(500).send("Error uploading file");
+        }
 
-      res.send({
-        success: true,
-        message: "Post created",
-        data: {
-          _id: savedPost._id,
-        },
+        console.log(data);
+
+        // Update topic count or create topic
+        const topic = await TopicModel.findOneAndUpdate(
+          { title: req.body.topic },
+          {
+            $inc: { posts: 1 },
+          },
+          { new: true, upsert: true }
+        ).exec();
+
+        const newPost = new PostModel({
+          topic_id: topic._id,
+          author_id: req.user.id,
+          caption: req.body.caption,
+          media_url: data.Location,
+          tiktok: `https://${req.body.tiktok.split("//").pop()}`,
+          media_source: MediaSource.UPLOAD,
+        });
+        const savedPost = await newPost.save();
+
+        res.send({
+          success: true,
+          message: "Post created",
+          data: {
+            _id: savedPost._id,
+          },
+        });
       });
     } catch (error) {
       console.error(error);
@@ -324,7 +351,7 @@ app.get("/post", PartialAuth, async (req: AuthRequest, res: Response) => {
   }
 });
 
-app.get("/post/:id", PartialAuth, async (req: Request, res: Response) => {
+app.get("/post/:id", PartialAuth, async (req: AuthRequest, res: Response) => {
   try {
     const post = await PostModel.findById(req.params.id)
       .select("-__v -media_source")
@@ -527,8 +554,7 @@ app.post("/share", Auth, async (req: AuthRequest, res: Response) => {
 app.listen(port, async () => {
   const connectDB = async () => {
     try {
-      const uri = "mongodb://localhost:27017/bitcast";
-      await mongoose.connect(uri);
+      await mongoose.connect(String(process.env.MONGODB_URI));
       console.log("[MongoDB] Connected successfully!");
     } catch (error) {
       console.error("[MongoDB] Error connecting: ", error);
@@ -540,15 +566,3 @@ app.listen(port, async () => {
   console.log(`[server]: Server is running at http://localhost:${port}`);
 });
 
-// (async function () {
-//   const wallet = new ethers.Wallet(
-//     "55c0ada3c1d377b334e455b92bf041cb93aeca8c400fba00b32e92cb8f0ff6dd"
-//   );
-//   const signature = await wallet.signMessage("message");
-//   console.log(`Signature: ${signature}`);
-
-//   (async function () {
-//     const recoveredAddress = ethers.verifyMessage("message", signature);
-//     console.log(`Signer: ${recoveredAddress}`);
-//   })();
-// })();

@@ -9,7 +9,7 @@ lerna-debug.log*
 
 node_modules
 node_modules/
-uploads/
+uploads/*
 *.eslintcache
 dist
 dist-ssr

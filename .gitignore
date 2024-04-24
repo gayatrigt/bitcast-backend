@@ -11,7 +11,7 @@ node_modules
 node_modules/
 uploads/*
 *.eslintcache
-dist
+# dist
 dist-ssr
 *.local
 

@@ -33,6 +33,7 @@ app.use(
     origin: [
       "http://localhost:5173",
       "http://localhost:6900",
+      "https://bitcast-client.vercel.app",
       // "https://rollover.co.nz",
       // "https://admin.rollover.co.nz",
     ],

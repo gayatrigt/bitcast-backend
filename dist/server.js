@@ -54,10 +54,10 @@ const app = (0, express_1.default)();
 const port = process.env.PORT || 6900;
 app.use((0, cors_1.default)({
     origin: [
+        "https://bitcast-client.vercel.app",
+        "https://bitcast-backend.onrender.com",
         "http://localhost:5173",
         "http://localhost:6900",
-        // "https://rollover.co.nz",
-        // "https://admin.rollover.co.nz",
     ],
     credentials: true,
     allowedHeaders: [

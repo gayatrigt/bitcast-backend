@@ -30,13 +30,12 @@ const port = process.env.PORT || 6900;
 
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:6900",
-      "https://bitcast-client.vercel.app",
-      // "https://rollover.co.nz",
-      // "https://admin.rollover.co.nz",
-    ],
+    // origin: [
+    //   "https://bitcast-client.vercel.app",
+    //   "https://bitcast-backend.onrender.com",
+    //   "http://localhost:5173",
+    //   "http://localhost:6900",
+    // ],
     credentials: true,
     allowedHeaders: [
       "Origin",
@@ -566,4 +565,3 @@ app.listen(port, async () => {
   await connectDB();
   console.log(`[server]: Server is running at http://localhost:${port}`);
 });
-

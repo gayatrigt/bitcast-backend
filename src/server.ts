@@ -30,12 +30,12 @@ const port = process.env.PORT || 6900;
 
 app.use(
   cors({
-    // origin: [
-    //   "https://bitcast-client.vercel.app",
-    //   "https://bitcast-backend.onrender.com",
-    //   "http://localhost:5173",
-    //   "http://localhost:6900",
-    // ],
+    origin: [
+      "https://bitcast-client.vercel.app",
+      "https://bitcast-backend.onrender.com",
+      "http://localhost:5173",
+      "http://localhost:6900",
+    ],
     credentials: true,
     allowedHeaders: [
       "Origin",

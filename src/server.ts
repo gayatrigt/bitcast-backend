@@ -18,10 +18,11 @@ import {
   TopicModel,
   VoteType,
   AuthRequest,
+  Post,
 } from "./schemas";
-import { BadRequestError, UnauthorizedError } from "./utils";
+import { BadRequestError, UnauthorizedError, parseSince } from "./utils";
 import { AuthUser } from "..";
-import ShareModel, { ShareMedium } from "./schemas/share";
+import { ShareModel, ShareMedium } from "./schemas/share";
 
 dotenv.config();
 
@@ -105,20 +106,19 @@ function PartialAuth(req: AuthRequest, res: Response, next: NextFunction) {
   });
 }
 
-const parseSort = (sortString: string): { by: string; order: SortOrder } => {
+const parseSort = (sortBy: string, sortOrder: string): { by: string; order: -1 | 1 } => {
   const sortByMap = {
     rec: "created_at",
     top: "upvotes",
     rand: "shares",
   } as { [x: string]: string };
 
-  if (sortString == "null") {
+  if (sortBy == "null") {
     return {
       by: sortByMap.rec,
       order: -1,
     };
   }
-  const [sortBy = "", sortOrder = ""] = sortString.split("-");
 
   const direction = sortOrder.toLocaleLowerCase() === "desc" ? -1 : 1;
 
@@ -126,19 +126,6 @@ const parseSort = (sortString: string): { by: string; order: SortOrder } => {
     by: sortByMap[sortBy.toLocaleLowerCase()],
     order: direction,
   };
-};
-
-const parseSince = (since: string) => {
-  if (!since) return null;
-
-  const sinceMap = {
-    "1h": new Date(Date.now() - 1 * 60 * 60 * 1000), // One hour in milliseconds
-    "6h": new Date(Date.now() - 6 * 60 * 60 * 1000),
-    "24h": new Date(Date.now() - 24 * 60 * 60 * 1000),
-    "7d": new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-  } as { [x: string]: any };
-
-  return sinceMap[since] || null;
 };
 
 const upload = multer({
@@ -277,33 +264,96 @@ app.post(
 
 app.get("/post", PartialAuth, async (req: AuthRequest, res: Response) => {
   try {
-    const { page = 1, limit = 20, sort, since, topic, author } = req.query;
+    const { page = 1, limit = 20, sort, order, since, topic, author } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
 
+    const sortData = parseSort(String(sort), String(order));
     const sinceData = parseSince(String(since));
-    const sortData = parseSort(String(sort || null));
 
     const query = {
-      ...(topic && { topic_id: topic }),
-      ...(author && { author_id: author }),
-      ...(sinceData && { created_at: { $gt: sinceData } }),
+      ...(topic && { topic_id: new mongoose.Types.ObjectId(String(topic)) }),
+      ...(author && { author_id: new mongoose.Types.ObjectId(String(author)) }),
+      ...(sinceData && { created_at: { $gte: sinceData } }),
     };
+
+    const sortObj = { [String(sortData.by)]: sortData.order };
 
     console.log("sort => ", { [String(sortData.by)]: sortData.order });
     console.log("query => ", query);
 
-    const getPosts = PostModel.find(query)
-      .sort({ [String(sortData.by)]: sortData.order })
-      .skip(skip)
-      .limit(Number(limit))
-      .populate("topic_id author_id");
-
-    const getPostsCount = PostModel.countDocuments(query).countDocuments();
-
-    let [docs, totalCount] = await Promise.all([
-      getPosts.lean().exec(),
-      getPostsCount,
+    const getPosts = await PostModel.aggregate([
+      {
+        $match: query,
+      },
+      {
+        $facet: {
+          data: [
+            // Sort stage to sort the orders by a field
+            {
+              $sort: sortObj,
+            },
+            // Skip stage to skip a certain number of documents
+            {
+              $skip: skip,
+            },
+            // Limit stage to limit the number of documents returned
+            {
+              $limit: Number(limit),
+            },
+            // Lookup stage to populate the product details
+            {
+              $lookup: {
+                from: "users", // Collection name to lookup
+                localField: "author_id", // Field in the current collection
+                foreignField: "_id", // Field in the foreign collection
+                as: "author", // Alias for the populated field
+              },
+            },
+            {
+              $lookup: {
+                from: "topics", // Collection name to lookup
+                localField: "topic_id", // Field in the current collection
+                foreignField: "_id", // Field in the foreign collection
+                as: "topic", // Alias for the populated field
+              },
+            },
+            // Unwind stage to flatten the array of populated products
+            {
+              $unwind: "$topic",
+            },
+            {
+              $unwind: "$author",
+            },
+            {
+              $project: {
+                _id: 1,
+                upvotes: 1,
+                downvotes: 1,
+                shares: 1,
+                caption: 1,
+                media_url: 1,
+                tiktok: 1,
+                media_source: 1,
+                created_at: 1,
+                author: {
+                  _id: 1,
+                  address: 1,
+                },
+                topic: {
+                  _id: 1,
+                  title: 1,
+                },
+              },
+            },
+          ],
+          count: [{ $count: "total" }],
+        },
+      },
     ]);
+
+    let { data, count } = getPosts[0];
+
+    const totalCount = count[0]?.total || 0
 
     const totalPages = Math.ceil(totalCount / Number(limit));
 
@@ -311,14 +361,14 @@ app.get("/post", PartialAuth, async (req: AuthRequest, res: Response) => {
       const votes = await VoteModel.find({
         user_id: req.user.id,
         post_id: {
-          $in: docs.map((x) => x._id),
+          $in: data.map((x: Post) => x._id),
         },
       })
         .lean()
         .exec();
 
-      // Post with votes
-      docs = docs.map((doc) => {
+      // Posts with votes
+      data = data.map((doc: Post) => {
         const vote = votes.filter(
           (el) => String(el.post_id) === String(doc._id)
         )[0];
@@ -331,12 +381,11 @@ app.get("/post", PartialAuth, async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // TODO: show if user have votes while sending result
     res.send({
       success: true,
       message: "",
       data: {
-        docs,
+        docs: data,
         meta: {
           page,
           limit,

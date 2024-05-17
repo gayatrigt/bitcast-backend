@@ -55,6 +55,4 @@ const shareSchema = new Schema<Share>(
   }
 );
 
-const ShareModel = model<Share>("Share", shareSchema);
-
-export default ShareModel;
+export const ShareModel = model<Share>("Share", shareSchema);

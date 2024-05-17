@@ -1,6 +1,7 @@
 import mongoose, { ObjectId, Schema, model } from "mongoose";
 
 export interface Post {
+  _id: string | ObjectId;
   topic_id: string | ObjectId;
   author_id: string | ObjectId;
   upvotes: number;

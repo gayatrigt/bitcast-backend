@@ -23,7 +23,7 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ShareMedium = void 0;
+exports.ShareModel = exports.ShareMedium = void 0;
 const mongoose_1 = __importStar(require("mongoose"));
 var ShareMedium;
 (function (ShareMedium) {
@@ -67,5 +67,4 @@ const shareSchema = new mongoose_1.Schema({
         updatedAt: "updated_at",
     },
 });
-const ShareModel = (0, mongoose_1.model)("Share", shareSchema);
-exports.default = ShareModel;
+exports.ShareModel = (0, mongoose_1.model)("Share", shareSchema);

@@ -186,8 +186,7 @@ app.post("/auth", async (req: AuthRequest, res: Response) => {
     // generate token for user
     const token = jwt.sign(
       { id: user._id, address: user.address },
-      String(process.env.JWT_SECRET),
-      { expiresIn: "90h" }
+      String(process.env.JWT_SECRET)
     );
 
     res.send({

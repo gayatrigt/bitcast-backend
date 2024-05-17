@@ -1,27 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-    __setModuleDefault(result, mod);
-    return result;
-};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -48,7 +25,7 @@ const multer_1 = __importDefault(require("multer"));
 // import path from "path";
 const schemas_1 = require("./schemas");
 const utils_1 = require("./utils");
-const share_1 = __importStar(require("./schemas/share"));
+const share_1 = require("./schemas/share");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = process.env.PORT || 6900;
@@ -122,35 +99,23 @@ function PartialAuth(req, res, next) {
         next();
     }));
 }
-const parseSort = (sortString) => {
+const parseSort = (sortBy, sortOrder) => {
     const sortByMap = {
         rec: "created_at",
         top: "upvotes",
         rand: "shares",
     };
-    if (sortString == "null") {
+    if (sortBy == "null") {
         return {
             by: sortByMap.rec,
             order: -1,
         };
     }
-    const [sortBy = "", sortOrder = ""] = sortString.split("-");
     const direction = sortOrder.toLocaleLowerCase() === "desc" ? -1 : 1;
     return {
         by: sortByMap[sortBy.toLocaleLowerCase()],
         order: direction,
     };
-};
-const parseSince = (since) => {
-    if (!since)
-        return null;
-    const sinceMap = {
-        "1h": new Date(Date.now() - 1 * 60 * 60 * 1000), // One hour in milliseconds
-        "6h": new Date(Date.now() - 6 * 60 * 60 * 1000),
-        "24h": new Date(Date.now() - 24 * 60 * 60 * 1000),
-        "7d": new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-    };
-    return sinceMap[since] || null;
 };
 const upload = (0, multer_1.default)({
     limits: {
@@ -197,7 +162,7 @@ app.post("/auth", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
             user = yield newUser.save();
         }
         // generate token for user
-        const token = jsonwebtoken_1.default.sign({ id: user._id, address: user.address }, String(process.env.JWT_SECRET), { expiresIn: "90h" });
+        const token = jsonwebtoken_1.default.sign({ id: user._id, address: user.address }, String(process.env.JWT_SECRET));
         res.send({
             success: true,
             message: "Signin successful",
@@ -259,46 +224,108 @@ app.post("/post", Auth, upload.single("media"), (req, res) => __awaiter(void 0, 
     }
 }));
 app.get("/post", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+    var _c;
     try {
-        const { page = 1, limit = 20, sort, since, topic, author } = req.query;
+        const { page = 1, limit = 20, sort, order, since, topic, author } = req.query;
         const skip = (Number(page) - 1) * Number(limit);
-        const sinceData = parseSince(String(since));
-        const sortData = parseSort(String(sort || null));
-        const query = Object.assign(Object.assign(Object.assign({}, (topic && { topic_id: topic })), (author && { author_id: author })), (sinceData && { created_at: { $gt: sinceData } }));
+        const sortData = parseSort(String(sort), String(order));
+        const sinceData = (0, utils_1.parseSince)(String(since));
+        const query = Object.assign(Object.assign(Object.assign({}, (topic && { topic_id: new mongoose_1.default.Types.ObjectId(String(topic)) })), (author && { author_id: new mongoose_1.default.Types.ObjectId(String(author)) })), (sinceData && { created_at: { $gte: sinceData } }));
+        const sortObj = { [String(sortData.by)]: sortData.order };
         console.log("sort => ", { [String(sortData.by)]: sortData.order });
         console.log("query => ", query);
-        const getPosts = schemas_1.PostModel.find(query)
-            .sort({ [String(sortData.by)]: sortData.order })
-            .skip(skip)
-            .limit(Number(limit))
-            .populate("topic_id author_id");
-        const getPostsCount = schemas_1.PostModel.countDocuments(query).countDocuments();
-        let [docs, totalCount] = yield Promise.all([
-            getPosts.lean().exec(),
-            getPostsCount,
+        const getPosts = yield schemas_1.PostModel.aggregate([
+            {
+                $match: query,
+            },
+            {
+                $facet: {
+                    data: [
+                        // Sort stage to sort the orders by a field
+                        {
+                            $sort: sortObj,
+                        },
+                        // Skip stage to skip a certain number of documents
+                        {
+                            $skip: skip,
+                        },
+                        // Limit stage to limit the number of documents returned
+                        {
+                            $limit: Number(limit),
+                        },
+                        // Lookup stage to populate the product details
+                        {
+                            $lookup: {
+                                from: "users", // Collection name to lookup
+                                localField: "author_id", // Field in the current collection
+                                foreignField: "_id", // Field in the foreign collection
+                                as: "author", // Alias for the populated field
+                            },
+                        },
+                        {
+                            $lookup: {
+                                from: "topics", // Collection name to lookup
+                                localField: "topic_id", // Field in the current collection
+                                foreignField: "_id", // Field in the foreign collection
+                                as: "topic", // Alias for the populated field
+                            },
+                        },
+                        // Unwind stage to flatten the array of populated products
+                        {
+                            $unwind: "$topic",
+                        },
+                        {
+                            $unwind: "$author",
+                        },
+                        {
+                            $project: {
+                                _id: 1,
+                                upvotes: 1,
+                                downvotes: 1,
+                                shares: 1,
+                                caption: 1,
+                                media_url: 1,
+                                tiktok: 1,
+                                media_source: 1,
+                                created_at: 1,
+                                author: {
+                                    _id: 1,
+                                    address: 1,
+                                },
+                                topic: {
+                                    _id: 1,
+                                    title: 1,
+                                },
+                            },
+                        },
+                    ],
+                    count: [{ $count: "total" }],
+                },
+            },
         ]);
+        let { data, count } = getPosts[0];
+        const totalCount = ((_c = count[0]) === null || _c === void 0 ? void 0 : _c.total) || 0;
         const totalPages = Math.ceil(totalCount / Number(limit));
         if (req.user !== undefined) {
             const votes = yield schemas_1.VoteModel.find({
                 user_id: req.user.id,
                 post_id: {
-                    $in: docs.map((x) => x._id),
+                    $in: data.map((x) => x._id),
                 },
             })
                 .lean()
                 .exec();
-            // Post with votes
-            docs = docs.map((doc) => {
+            // Posts with votes
+            data = data.map((doc) => {
                 const vote = votes.filter((el) => String(el.post_id) === String(doc._id))[0];
                 return Object.assign(Object.assign(Object.assign({}, doc), (vote && vote.type == schemas_1.VoteType.UPVOTE && { upvoted: true })), (vote && vote.type == schemas_1.VoteType.DOWNVOTE && { downvoted: true }));
             });
         }
-        // TODO: show if user have votes while sending result
         res.send({
             success: true,
             message: "",
             data: {
-                docs,
+                docs: data,
                 meta: {
                     page,
                     limit,
@@ -448,7 +475,7 @@ app.post("/share", Auth, (req, res) => __awaiter(void 0, void 0, void 0, functio
         if (!post)
             return;
         // create record if it doesnt exist and increase click count
-        yield share_1.default.findOneAndUpdate({
+        yield share_1.ShareModel.findOneAndUpdate({
             post_id: p,
             sharerer_id: s,
             medium: Object.values(share_1.ShareMedium).includes(m)

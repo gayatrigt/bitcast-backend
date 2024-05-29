@@ -66,15 +66,15 @@ function Auth(req, res, next) {
     const token = token2 || token1;
     // Check if token is provided
     if (!token)
-        return res.status(401).json({ message: "No token provided" });
+        UnauthorizedError({ message: "No token provided" });
     jsonwebtoken_1.default.verify(token, String(process.env.JWT_SECRET), (err, decoded) => __awaiter(this, void 0, void 0, function* () {
         if (err)
-            return res.status(401).json({ message: "Invalid token" });
+            UnauthorizedError({ message: "Invalid token" });
         if (!decoded)
-            return res.status(401).json({ message: "Invalid token" });
+            UnauthorizedError({ message: "Invalid token" });
         const user = yield schemas_1.UserModel.findById(decoded.id).lean();
         if (!user)
-            return res.status(401).json({ message: "Invalid user" });
+            UnauthorizedError({ message: "Invalid user" });
         req.user = decoded;
         next();
     }));
@@ -89,12 +89,12 @@ function PartialAuth(req, res, next) {
         return next();
     jsonwebtoken_1.default.verify(token, String(process.env.JWT_SECRET), (err, decoded) => __awaiter(this, void 0, void 0, function* () {
         if (err)
-            return res.status(401).json({ message: "Invalid token" });
+            UnauthorizedError({ message: "Invalid token" });
         if (!decoded)
-            return res.status(401).json({ message: "Invalid token" });
+            UnauthorizedError({ message: "Invalid token" });
         const user = yield schemas_1.UserModel.findById(decoded.id).lean();
         if (!user)
-            return res.status(401).json({ message: "Invalid user" });
+            UnauthorizedError({ message: "Invalid user" });
         req.user = decoded;
         next();
     }));
@@ -350,7 +350,7 @@ app.get("/post/:id", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0
             select: "title",
         });
         if (!post) {
-            return res.status(404).json({ message: "Post not found" });
+            throw new NotFoundError("Post not found");
         }
         res.send({
             success: true,
@@ -387,7 +387,7 @@ app.patch("/post/:id/upvote", Auth, (req, res) => __awaiter(void 0, void 0, void
         // keep share id
         const updatedPost = yield schemas_1.PostModel.findByIdAndUpdate(postId, { $inc: { upvotes: 1 } }, { new: true });
         if (!updatedPost)
-            return res.status(404).json({ message: "Post not found" });
+            throw new NotFoundError("Post not found");
         res.send({
             success: true,
             message: "Post upvoted",
@@ -423,7 +423,7 @@ app.patch("/post/:id/downvote", Auth, (req, res) => __awaiter(void 0, void 0, vo
         // keep share id
         const updatedPost = yield schemas_1.PostModel.findByIdAndUpdate(postId, { $inc: { downvotes: 1 } }, { new: true });
         if (!updatedPost)
-            return res.status(404).json({ message: "Post not found" });
+            throw new NotFoundError("Post not found");
         res.send({
             success: true,
             message: "Post downvoted",

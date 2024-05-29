@@ -1,4 +1,10 @@
-import express, { Express, NextFunction, Request, Response } from "express";
+import express, {
+  Errback,
+  Express,
+  NextFunction,
+  Request,
+  Response,
+} from "express";
 import mongoose, { SortOrder } from "mongoose";
 import { ethers } from "ethers";
 import dotenv from "dotenv";
@@ -20,7 +26,13 @@ import {
   AuthRequest,
   Post,
 } from "./schemas";
-import { BadRequestError, UnauthorizedError, parseSince } from "./utils";
+import {
+  BadRequestError,
+  NotFoundError,
+  UnauthorizedError,
+  httpErrorHandler,
+  parseSince,
+} from "./utils";
 import { AuthUser } from "..";
 import { ShareModel, ShareMedium } from "./schemas/share";
 
@@ -70,15 +82,15 @@ function Auth(req: AuthRequest, res: Response, next: NextFunction) {
   const token = token2 || token1;
 
   // Check if token is provided
-  if (!token) return res.status(401).json({ message: "No token provided" });
+  if (!token) throw new UnauthorizedError("No token provided");
 
   jwt.verify(token, String(process.env.JWT_SECRET), async (err, decoded) => {
-    if (err) return res.status(401).json({ message: "Invalid token" });
-    if (!decoded) return res.status(401).json({ message: "Invalid token" });
+    if (err) throw new UnauthorizedError("Invalid token");
+    if (!decoded) throw new UnauthorizedError("Invalid token");
 
     const user = await UserModel.findById((decoded as any).id).lean();
 
-    if (!user) return res.status(401).json({ message: "Invalid user" });
+    if (!user) throw new UnauthorizedError("Invalid user");
 
     req.user = decoded as AuthUser;
     next();
@@ -94,19 +106,22 @@ function PartialAuth(req: AuthRequest, res: Response, next: NextFunction) {
   if (!token) return next();
 
   jwt.verify(token, String(process.env.JWT_SECRET), async (err, decoded) => {
-    if (err) return res.status(401).json({ message: "Invalid token" });
-    if (!decoded) return res.status(401).json({ message: "Invalid token" });
+    if (err) throw new UnauthorizedError("Invalid token");
+    if (!decoded) throw new UnauthorizedError("Invalid token");
 
     const user = await UserModel.findById((decoded as any).id).lean();
 
-    if (!user) return res.status(401).json({ message: "Invalid user" });
+    if (!user) throw new UnauthorizedError("Invalid user");
 
     req.user = decoded as AuthUser;
     next();
   });
 }
 
-const parseSort = (sortBy: string, sortOrder: string): { by: string; order: -1 | 1 } => {
+const parseSort = (
+  sortBy: string,
+  sortOrder: string
+): { by: string; order: -1 | 1 } => {
   const sortByMap = {
     rec: "created_at",
     top: "upvotes",
@@ -128,16 +143,32 @@ const parseSort = (sortBy: string, sortOrder: string): { by: string; order: -1 |
   };
 };
 
+const uploadFile = (fieldName: string) => {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    upload.single(fieldName)(req, res, (error) => {
+      if (error) return next(error);
+      next();
+    });
+  };
+};
+
 const upload = multer({
   limits: {
     fileSize: 100 * 1024 * 1024, // 100mb max file size
   },
-  fileFilter: (req, file, cb) => {
-    const mime_types = ["video/webm", "video/x-msvideo", "video/mp4"];
+  fileFilter: (_req, file, cb) => {
+    const mime_types = [
+      "video/webm",
+      "video/x-msvideo",
+      "video/mp4",
+      "video/quicktime",
+      "video/x-msvideo",
+      "video/x-ms-wmv",
+    ];
     if (mime_types.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error("Unsupported file type"));
+      cb(new BadRequestError("Unsupported file type"));
     }
   },
   storage: multer.memoryStorage(),
@@ -152,67 +183,73 @@ const upload = multer({
   // }),
 });
 
-app.use("/ping", Auth, (req: AuthRequest, res: Response) => {
-  res.send(`Hello! ${req.user.address}`);
-});
-
-app.post("/auth", async (req: AuthRequest, res: Response) => {
-  interface SigninMessage {
-    message: string;
-    signature: string;
-    signerAddress: string;
+app.use(
+  "/ping",
+  Auth,
+  (req: AuthRequest, res: Response, next: NextFunction) => {
+    res.send(`Hello! ${req.user.address}`);
   }
+);
 
-  try {
-    // veryify signature
-    const { message, signature, signerAddress }: SigninMessage = req.body;
-
-    // Verify the signature
-    const recoveredAddress = ethers.verifyMessage(message, signature);
-
-    // Compare the recovered address with the expected signer address
-    if (recoveredAddress.toLowerCase() !== signerAddress.toLowerCase())
-      throw new UnauthorizedError("Signature is invalid");
-
-    // check if user already exist
-    let user = await UserModel.findOne({ address: recoveredAddress }).exec();
-    if (!user) {
-      const newUser = new UserModel({
-        address: recoveredAddress,
-      });
-      user = await newUser.save();
+app.post(
+  "/auth",
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    interface SigninMessage {
+      message: string;
+      signature: string;
+      signerAddress: string;
     }
 
-    // generate token for user
-    const token = jwt.sign(
-      { id: user._id, address: user.address },
-      String(process.env.JWT_SECRET)
-    );
+    try {
+      // veryify signature
+      const { message, signature, signerAddress }: SigninMessage = req.body;
 
-    res.send({
-      success: true,
-      message: "Signin successful",
-      data: {
-        address: recoveredAddress,
-        access_token: token,
-      },
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
+      // Verify the signature
+      const recoveredAddress = ethers.verifyMessage(message, signature);
+
+      // Compare the recovered address with the expected signer address
+      if (recoveredAddress.toLowerCase() !== signerAddress.toLowerCase())
+        throw new UnauthorizedError("Signature is invalid");
+
+      // check if user already exist
+      let user = await UserModel.findOne({ address: recoveredAddress }).exec();
+      if (!user) {
+        const newUser = new UserModel({
+          address: recoveredAddress,
+        });
+        user = await newUser.save();
+      }
+
+      // generate token for user
+      const token = jwt.sign(
+        { id: user._id, address: user.address },
+        String(process.env.JWT_SECRET)
+      );
+
+      res.send({
+        success: true,
+        message: "Signin successful",
+        data: {
+          address: recoveredAddress,
+          access_token: token,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 // TODO: use transaction
 // delete file after upload to s3 or failed upload
 app.post(
   "/post",
   Auth,
-  upload.single("media"),
-  async (req: AuthRequest, res: Response) => {
-    if (!req.file) return res.send("No file uploaded");
-    console.log(req.file);
+  uploadFile("media"),
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
+      if (!req.file) throw new BadRequestError("No file uploaded");
+
       const params: AWS.S3.PutObjectRequest = {
         Bucket: "bitcast/media",
         Key: req.file?.originalname,
@@ -220,12 +257,7 @@ app.post(
       };
 
       s3.upload(params, async (err: unknown, data: any) => {
-        if (err) {
-          console.error(err);
-          return res.status(500).send("Error uploading file");
-        }
-
-        console.log(data);
+        if (err) throw err;
 
         // Update topic count or create topic
         const topic = await TopicModel.findOneAndUpdate(
@@ -255,227 +287,241 @@ app.post(
         });
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: `${error}` });
+      next(error);
     }
   }
 );
 
-app.get("/post", PartialAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const { page = 1, limit = 20, sort, order, since, topic, author } = req.query;
-    const skip = (Number(page) - 1) * Number(limit);
+app.get(
+  "/post",
+  PartialAuth,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const {
+        page = 1,
+        limit = 20,
+        sort,
+        order,
+        since,
+        topic,
+        author,
+      } = req.query;
+      const skip = (Number(page) - 1) * Number(limit);
 
-    const sortData = parseSort(String(sort), String(order));
-    const sinceData = parseSince(String(since));
+      const sortData = parseSort(String(sort), String(order));
+      const sinceData = parseSince(String(since));
 
-    const query = {
-      ...(topic && { topic_id: new mongoose.Types.ObjectId(String(topic)) }),
-      ...(author && { author_id: new mongoose.Types.ObjectId(String(author)) }),
-      ...(sinceData && { created_at: { $gte: sinceData } }),
-    };
+      const query = {
+        ...(topic && { topic_id: new mongoose.Types.ObjectId(String(topic)) }),
+        ...(author && {
+          author_id: new mongoose.Types.ObjectId(String(author)),
+        }),
+        ...(sinceData && { created_at: { $gte: sinceData } }),
+      };
 
-    const sortObj = { [String(sortData.by)]: sortData.order };
+      const sortObj = { [String(sortData.by)]: sortData.order };
 
-    console.log("sort => ", { [String(sortData.by)]: sortData.order });
-    console.log("query => ", query);
-
-    const getPosts = await PostModel.aggregate([
-      {
-        $match: query,
-      },
-      {
-        $facet: {
-          data: [
-            // Sort stage to sort the orders by a field
-            {
-              $sort: sortObj,
-            },
-            // Skip stage to skip a certain number of documents
-            {
-              $skip: skip,
-            },
-            // Limit stage to limit the number of documents returned
-            {
-              $limit: Number(limit),
-            },
-            // Lookup stage to populate the product details
-            {
-              $lookup: {
-                from: "users", // Collection name to lookup
-                localField: "author_id", // Field in the current collection
-                foreignField: "_id", // Field in the foreign collection
-                as: "author", // Alias for the populated field
+      const getPosts = await PostModel.aggregate([
+        {
+          $match: query,
+        },
+        {
+          $facet: {
+            data: [
+              // Sort stage to sort the orders by a field
+              {
+                $sort: sortObj,
               },
-            },
-            {
-              $lookup: {
-                from: "topics", // Collection name to lookup
-                localField: "topic_id", // Field in the current collection
-                foreignField: "_id", // Field in the foreign collection
-                as: "topic", // Alias for the populated field
+              // Skip stage to skip a certain number of documents
+              {
+                $skip: skip,
               },
-            },
-            // Unwind stage to flatten the array of populated products
-            {
-              $unwind: "$topic",
-            },
-            {
-              $unwind: "$author",
-            },
-            {
-              $project: {
-                _id: 1,
-                upvotes: 1,
-                downvotes: 1,
-                shares: 1,
-                caption: 1,
-                media_url: 1,
-                tiktok: 1,
-                media_source: 1,
-                created_at: 1,
-                author: {
-                  _id: 1,
-                  address: 1,
-                },
-                topic: {
-                  _id: 1,
-                  title: 1,
+              // Limit stage to limit the number of documents returned
+              {
+                $limit: Number(limit),
+              },
+              // Lookup stage to populate the product details
+              {
+                $lookup: {
+                  from: "users", // Collection name to lookup
+                  localField: "author_id", // Field in the current collection
+                  foreignField: "_id", // Field in the foreign collection
+                  as: "author", // Alias for the populated field
                 },
               },
-            },
-          ],
-          count: [{ $count: "total" }],
+              {
+                $lookup: {
+                  from: "topics", // Collection name to lookup
+                  localField: "topic_id", // Field in the current collection
+                  foreignField: "_id", // Field in the foreign collection
+                  as: "topic", // Alias for the populated field
+                },
+              },
+              // Unwind stage to flatten the array of populated products
+              {
+                $unwind: "$topic",
+              },
+              {
+                $unwind: "$author",
+              },
+              {
+                $project: {
+                  _id: 1,
+                  upvotes: 1,
+                  downvotes: 1,
+                  shares: 1,
+                  caption: 1,
+                  media_url: 1,
+                  tiktok: 1,
+                  media_source: 1,
+                  created_at: 1,
+                  author: {
+                    _id: 1,
+                    address: 1,
+                  },
+                  topic: {
+                    _id: 1,
+                    title: 1,
+                  },
+                },
+              },
+            ],
+            count: [{ $count: "total" }],
+          },
         },
-      },
-    ]);
+      ]);
 
-    let { data, count } = getPosts[0];
+      let { data, count } = getPosts[0];
 
-    const totalCount = count[0]?.total || 0
+      const totalCount = count[0]?.total || 0;
 
-    const totalPages = Math.ceil(totalCount / Number(limit));
+      const totalPages = Math.ceil(totalCount / Number(limit));
 
-    if (req.user !== undefined) {
-      const votes = await VoteModel.find({
-        user_id: req.user.id,
-        post_id: {
-          $in: data.map((x: Post) => x._id),
+      if (req.user !== undefined) {
+        const votes = await VoteModel.find({
+          user_id: req.user.id,
+          post_id: {
+            $in: data.map((x: Post) => x._id),
+          },
+        })
+          .lean()
+          .exec();
+
+        // Posts with votes
+        data = data.map((doc: Post) => {
+          const vote = votes.filter(
+            (el) => String(el.post_id) === String(doc._id)
+          )[0];
+
+          return {
+            ...doc,
+            ...(vote && vote.type == VoteType.UPVOTE && { upvoted: true }),
+            ...(vote && vote.type == VoteType.DOWNVOTE && { downvoted: true }),
+          };
+        });
+      }
+
+      res.send({
+        success: true,
+        message: "",
+        data: {
+          docs: data,
+          meta: {
+            page,
+            limit,
+            total_count: totalCount,
+            total_pages: totalPages,
+          },
         },
-      })
-        .lean()
-        .exec();
-
-      // Posts with votes
-      data = data.map((doc: Post) => {
-        const vote = votes.filter(
-          (el) => String(el.post_id) === String(doc._id)
-        )[0];
-
-        return {
-          ...doc,
-          ...(vote && vote.type == VoteType.UPVOTE && { upvoted: true }),
-          ...(vote && vote.type == VoteType.DOWNVOTE && { downvoted: true }),
-        };
       });
+    } catch (error) {
+      next(error);
     }
-
-    res.send({
-      success: true,
-      message: "",
-      data: {
-        docs: data,
-        meta: {
-          page,
-          limit,
-          total_count: totalCount,
-          total_pages: totalPages,
-        },
-      },
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
   }
-});
+);
 
-app.get("/post/:id", PartialAuth, async (req: AuthRequest, res: Response) => {
-  try {
-    const post = await PostModel.findById(req.params.id)
-      .select("-__v -media_source")
-      .populate({
-        path: "topic_id",
-        model: "Topic",
-        select: "title",
+app.get(
+  "/post/:id",
+  PartialAuth,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const post = await PostModel.findById(req.params.id)
+        .select("-__v -media_source")
+        .populate({
+          path: "topic_id",
+          model: "Topic",
+          select: "title",
+        });
+      if (!post) {
+        throw new NotFoundError("Post not found");
+      }
+      res.send({
+        success: true,
+        message: "",
+        data: post,
       });
-    if (!post) {
-      return res.status(404).json({ message: "Post not found" });
+    } catch (error) {
+      next(error);
     }
-    res.send({
-      success: true,
-      message: "",
-      data: post,
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
   }
-});
+);
 
 // TODO: use transaction
-app.patch("/post/:id/upvote", Auth, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user.id;
-    const postId = req.params.id;
+app.patch(
+  "/post/:id/upvote",
+  Auth,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user.id;
+      const postId = req.params.id;
 
-    // check the Vote shcema to see if the person has upvoted the post before, if yes return
-    let vote = await VoteModel.findOne({ user_id: userId, post_id: postId });
-    if (vote && vote.type == VoteType.UPVOTE)
-      throw new BadRequestError("You've already upvoted this post");
+      // check the Vote shcema to see if the person has upvoted the post before, if yes return
+      let vote = await VoteModel.findOne({ user_id: userId, post_id: postId });
+      if (vote && vote.type == VoteType.UPVOTE)
+        throw new BadRequestError("You've already upvoted this post");
 
-    // if downvoted, delete
-    if (vote && vote.type == VoteType.DOWNVOTE) {
-      await VoteModel.findByIdAndDelete(vote._id);
-      await PostModel.findByIdAndUpdate(
+      // if downvoted, delete
+      if (vote && vote.type == VoteType.DOWNVOTE) {
+        await VoteModel.findByIdAndDelete(vote._id);
+        await PostModel.findByIdAndUpdate(
+          postId,
+          { $inc: { downvotes: -1 } },
+          { new: true }
+        );
+      }
+
+      const newVote = new VoteModel({
+        user_id: userId,
+        post_id: postId,
+        type: VoteType.UPVOTE,
+      });
+      await newVote.save();
+
+      // check if it was shared and inc upvote the share schema by {post_id, sharerer_id, medium}
+      // keep share id
+      const updatedPost = await PostModel.findByIdAndUpdate(
         postId,
-        { $inc: { downvotes: -1 } },
+        { $inc: { upvotes: 1 } },
         { new: true }
       );
+      if (!updatedPost) throw new NotFoundError("Post not found");
+
+      res.send({
+        success: true,
+        message: "Post upvoted",
+        data: {},
+      });
+    } catch (error) {
+      next(error);
     }
-
-    const newVote = new VoteModel({
-      user_id: userId,
-      post_id: postId,
-      type: VoteType.UPVOTE,
-    });
-    await newVote.save();
-
-    // check if it was shared and inc upvote the share schema by {post_id, sharerer_id, medium}
-    // keep share id
-    const updatedPost = await PostModel.findByIdAndUpdate(
-      postId,
-      { $inc: { upvotes: 1 } },
-      { new: true }
-    );
-    if (!updatedPost)
-      return res.status(404).json({ message: "Post not found" });
-
-    res.send({
-      success: true,
-      message: "Post upvoted",
-      data: {},
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
   }
-});
+);
 
 // TODO: use transaction
 app.patch(
   "/post/:id/downvote",
   Auth,
-  async (req: AuthRequest, res: Response) => {
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
       const userId = req.user.id;
       const postId = req.params.id;
@@ -509,8 +555,7 @@ app.patch(
         { $inc: { downvotes: 1 } },
         { new: true }
       );
-      if (!updatedPost)
-        return res.status(404).json({ message: "Post not found" });
+      if (!updatedPost) throw new NotFoundError("Post not found");
 
       res.send({
         success: true,
@@ -518,86 +563,93 @@ app.patch(
         data: {},
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: `${error}` });
+      next(error);
     }
   }
 );
 
-app.patch("/post/:id/unvote", Auth, async (req: AuthRequest, res: Response) => {
-  try {
-    const userId = req.user.id;
-    const postId = req.params.id;
+app.patch(
+  "/post/:id/unvote",
+  Auth,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      const userId = req.user.id;
+      const postId = req.params.id;
 
-    // check vote schema to see if user has vote
-    let vote = await VoteModel.findOneAndDelete({
-      user_id: userId,
-      post_id: postId,
-    });
-    if (!vote) throw new BadRequestError("You've already unvoted this post");
+      // check vote schema to see if user has vote
+      let vote = await VoteModel.findOneAndDelete({
+        user_id: userId,
+        post_id: postId,
+      });
+      if (!vote) throw new BadRequestError("You've already unvoted this post");
 
-    // decrement post upvote or downvote
-    await PostModel.findByIdAndUpdate(
-      postId,
-      {
-        $inc:
-          vote.type == VoteType.UPVOTE ? { upvotes: -1 } : { downvotes: -1 },
-      },
-      { new: true }
-    );
-    res.send({
-      success: true,
-      message: "Post unvoted",
-      data: {},
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
+      // decrement post upvote or downvote
+      await PostModel.findByIdAndUpdate(
+        postId,
+        {
+          $inc:
+            vote.type == VoteType.UPVOTE ? { upvotes: -1 } : { downvotes: -1 },
+        },
+        { new: true }
+      );
+      res.send({
+        success: true,
+        message: "Post unvoted",
+        data: {},
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
 
 // when a post loads it hits this endpoint
-app.post("/share", Auth, async (req: AuthRequest, res: Response) => {
-  try {
-    // m - Medium
-    // s- sharerer id
-    // p - post id
-    const { m, s, p } = req.body;
+app.post(
+  "/share",
+  Auth,
+  async (req: AuthRequest, res: Response, next: NextFunction) => {
+    try {
+      // m - Medium
+      // s- sharerer id
+      // p - post id
+      const { m, s, p } = req.body;
 
-    const user = await UserModel.findById(s);
-    if (!user) return;
+      const user = await UserModel.findById(s);
+      if (!user) return;
 
-    const post = await PostModel.findById(p);
-    if (!post) return;
+      const post = await PostModel.findById(p);
+      if (!post) return;
 
-    // create record if it doesnt exist and increase click count
-    await ShareModel.findOneAndUpdate(
-      {
-        post_id: p,
-        sharerer_id: s,
-        medium: Object.values(ShareMedium).includes(m)
-          ? m
-          : ShareMedium.GENERIC,
-      },
-      {
-        $inc: { clicks: 1 },
-      },
-      {
-        new: true,
-        upsert: true,
-      }
-    );
+      // create record if it doesnt exist and increase click count
+      await ShareModel.findOneAndUpdate(
+        {
+          post_id: p,
+          sharerer_id: s,
+          medium: Object.values(ShareMedium).includes(m)
+            ? m
+            : ShareMedium.GENERIC,
+        },
+        {
+          $inc: { clicks: 1 },
+        },
+        {
+          new: true,
+          upsert: true,
+        }
+      );
 
-    res.send({
-      success: true,
-      message: "",
-      data: {},
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: `${error}` });
+      res.send({
+        success: true,
+        message: "",
+        data: {},
+      });
+    } catch (error) {
+      next(error);
+    }
   }
-});
+);
+
+app.use(httpErrorHandler);
 
 app.listen(port, async () => {
   const connectDB = async () => {

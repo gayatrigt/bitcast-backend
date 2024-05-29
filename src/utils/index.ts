@@ -1,3 +1,5 @@
+import { BadRequestError } from "./error";
+
 export * from "./error";
 export * from "./response";
 
@@ -8,7 +10,7 @@ export const parseSince = (data: string) => {
   const unit = data.slice(data.length - 1);
 
   if (isNaN(parseInt(amt)) || !isNaN(parseInt(unit)))
-    throw new Error("Invalid date format");
+    throw new BadRequestError("Invalid date format");
 
   const units = {
     H: 1000 * 60 * 60,

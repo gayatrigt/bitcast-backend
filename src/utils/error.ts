@@ -1,3 +1,6 @@
+import express, { NextFunction, Response } from "express";
+import { AuthRequest } from "../schemas";
+
 export abstract class HttpError extends Error {
   abstract readonly statusCode: number;
 
@@ -47,14 +50,23 @@ export class NotFoundError extends HttpError {
   }
 }
 
-export const httpErrorHandler = (error: unknown, res: Response) => {
-  if (error instanceof HttpError) {
-    console.error(
-      `Error occurred: ${error.message} (Status Code: ${error.statusCode})`
-    );
-    // Handle specific HTTP errors based on their status code
-  } else {
-    console.error("Unexpected error:", error);
-    // Handle other types of errors
-  }
+export const httpErrorHandler = (
+  error: any,
+  _req: AuthRequest,
+  res: Response,
+  next: NextFunction
+) => {
+  console.error(error);
+  const statusCode = error.statusCode || 500;
+  const errorMsg =
+    error instanceof HttpError ? error.message : "Something went wrong";
+
+  res.status(statusCode).json({
+    success: false,
+    status: statusCode,
+    message: errorMsg,
+    stack: process.env.NODE_ENV === "development" ? error.stack : {},
+  });
+
+  return;
 };

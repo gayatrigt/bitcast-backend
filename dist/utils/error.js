@@ -43,14 +43,16 @@ class NotFoundError extends HttpError {
     }
 }
 exports.NotFoundError = NotFoundError;
-const httpErrorHandler = (error, res) => {
-    if (error instanceof HttpError) {
-        console.error(`Error occurred: ${error.message} (Status Code: ${error.statusCode})`);
-        // Handle specific HTTP errors based on their status code
-    }
-    else {
-        console.error("Unexpected error:", error);
-        // Handle other types of errors
-    }
+const httpErrorHandler = (error, _req, res, next) => {
+    console.error(error);
+    const statusCode = error.statusCode || 500;
+    const errorMsg = error instanceof HttpError ? error.message : "Something went wrong";
+    res.status(statusCode).json({
+        success: false,
+        status: statusCode,
+        message: errorMsg,
+        stack: process.env.NODE_ENV === "development" ? error.stack : {},
+    });
+    return;
 };
 exports.httpErrorHandler = httpErrorHandler;

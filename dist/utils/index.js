@@ -15,6 +15,7 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseSince = void 0;
+const error_1 = require("./error");
 __exportStar(require("./error"), exports);
 __exportStar(require("./response"), exports);
 const parseSince = (data) => {
@@ -23,7 +24,7 @@ const parseSince = (data) => {
     const amt = data.slice(0, data.length - 1);
     const unit = data.slice(data.length - 1);
     if (isNaN(parseInt(amt)) || !isNaN(parseInt(unit)))
-        throw new Error("Invalid date format");
+        throw new error_1.BadRequestError("Invalid date format");
     const units = {
         H: 1000 * 60 * 60,
         D: 1000 * 60 * 60 * 24,

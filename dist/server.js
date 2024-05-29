@@ -66,15 +66,15 @@ function Auth(req, res, next) {
     const token = token2 || token1;
     // Check if token is provided
     if (!token)
-        UnauthorizedError({ message: "No token provided" });
+        throw new utils_1.UnauthorizedError("No token provided");
     jsonwebtoken_1.default.verify(token, String(process.env.JWT_SECRET), (err, decoded) => __awaiter(this, void 0, void 0, function* () {
         if (err)
-            UnauthorizedError({ message: "Invalid token" });
+            throw new utils_1.UnauthorizedError("Invalid token");
         if (!decoded)
-            UnauthorizedError({ message: "Invalid token" });
+            throw new utils_1.UnauthorizedError("Invalid token");
         const user = yield schemas_1.UserModel.findById(decoded.id).lean();
         if (!user)
-            UnauthorizedError({ message: "Invalid user" });
+            throw new utils_1.UnauthorizedError("Invalid user");
         req.user = decoded;
         next();
     }));
@@ -89,12 +89,12 @@ function PartialAuth(req, res, next) {
         return next();
     jsonwebtoken_1.default.verify(token, String(process.env.JWT_SECRET), (err, decoded) => __awaiter(this, void 0, void 0, function* () {
         if (err)
-            UnauthorizedError({ message: "Invalid token" });
+            throw new utils_1.UnauthorizedError("Invalid token");
         if (!decoded)
-            UnauthorizedError({ message: "Invalid token" });
+            throw new utils_1.UnauthorizedError("Invalid token");
         const user = yield schemas_1.UserModel.findById(decoded.id).lean();
         if (!user)
-            UnauthorizedError({ message: "Invalid user" });
+            throw new utils_1.UnauthorizedError("Invalid user");
         req.user = decoded;
         next();
     }));
@@ -117,17 +117,33 @@ const parseSort = (sortBy, sortOrder) => {
         order: direction,
     };
 };
+const uploadFile = (fieldName) => {
+    return (req, res, next) => {
+        upload.single(fieldName)(req, res, (error) => {
+            if (error)
+                return next(error);
+            next();
+        });
+    };
+};
 const upload = (0, multer_1.default)({
     limits: {
         fileSize: 100 * 1024 * 1024, // 100mb max file size
     },
-    fileFilter: (req, file, cb) => {
-        const mime_types = ["video/webm", "video/x-msvideo", "video/mp4"];
+    fileFilter: (_req, file, cb) => {
+        const mime_types = [
+            "video/webm",
+            "video/x-msvideo",
+            "video/mp4",
+            "video/quicktime",
+            "video/x-msvideo",
+            "video/x-ms-wmv",
+        ];
         if (mime_types.includes(file.mimetype)) {
             cb(null, true);
         }
         else {
-            cb(new Error("Unsupported file type"));
+            cb(new utils_1.BadRequestError("Unsupported file type"));
         }
     },
     storage: multer_1.default.memoryStorage(),
@@ -141,10 +157,10 @@ const upload = (0, multer_1.default)({
     //   },
     // }),
 });
-app.use("/ping", Auth, (req, res) => {
+app.use("/ping", Auth, (req, res, next) => {
     res.send(`Hello! ${req.user.address}`);
 });
-app.post("/auth", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.post("/auth", (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // veryify signature
         const { message, signature, signerAddress } = req.body;
@@ -173,29 +189,24 @@ app.post("/auth", (req, res) => __awaiter(void 0, void 0, void 0, function* () {
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
 // TODO: use transaction
 // delete file after upload to s3 or failed upload
-app.post("/post", Auth, upload.single("media"), (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.post("/post", Auth, uploadFile("media"), (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     var _a, _b;
-    if (!req.file)
-        return res.send("No file uploaded");
-    console.log(req.file);
     try {
+        if (!req.file)
+            throw new utils_1.BadRequestError("No file uploaded");
         const params = {
             Bucket: "bitcast/media",
             Key: (_a = req.file) === null || _a === void 0 ? void 0 : _a.originalname,
             Body: (_b = req.file) === null || _b === void 0 ? void 0 : _b.buffer,
         };
         s3.upload(params, (err, data) => __awaiter(void 0, void 0, void 0, function* () {
-            if (err) {
-                console.error(err);
-                return res.status(500).send("Error uploading file");
-            }
-            console.log(data);
+            if (err)
+                throw err;
             // Update topic count or create topic
             const topic = yield schemas_1.TopicModel.findOneAndUpdate({ title: req.body.topic }, {
                 $inc: { posts: 1 },
@@ -219,21 +230,20 @@ app.post("/post", Auth, upload.single("media"), (req, res) => __awaiter(void 0, 
         }));
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
-app.get("/post", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.get("/post", PartialAuth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     var _c;
     try {
-        const { page = 1, limit = 20, sort, order, since, topic, author } = req.query;
+        const { page = 1, limit = 20, sort, order, since, topic, author, } = req.query;
         const skip = (Number(page) - 1) * Number(limit);
         const sortData = parseSort(String(sort), String(order));
         const sinceData = (0, utils_1.parseSince)(String(since));
-        const query = Object.assign(Object.assign(Object.assign({}, (topic && { topic_id: new mongoose_1.default.Types.ObjectId(String(topic)) })), (author && { author_id: new mongoose_1.default.Types.ObjectId(String(author)) })), (sinceData && { created_at: { $gte: sinceData } }));
+        const query = Object.assign(Object.assign(Object.assign({}, (topic && { topic_id: new mongoose_1.default.Types.ObjectId(String(topic)) })), (author && {
+            author_id: new mongoose_1.default.Types.ObjectId(String(author)),
+        })), (sinceData && { created_at: { $gte: sinceData } }));
         const sortObj = { [String(sortData.by)]: sortData.order };
-        console.log("sort => ", { [String(sortData.by)]: sortData.order });
-        console.log("query => ", query);
         const getPosts = yield schemas_1.PostModel.aggregate([
             {
                 $match: query,
@@ -336,11 +346,10 @@ app.get("/post", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0, fu
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
-app.get("/post/:id", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.get("/post/:id", PartialAuth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const post = yield schemas_1.PostModel.findById(req.params.id)
             .select("-__v -media_source")
@@ -350,7 +359,7 @@ app.get("/post/:id", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0
             select: "title",
         });
         if (!post) {
-            throw new NotFoundError("Post not found");
+            throw new utils_1.NotFoundError("Post not found");
         }
         res.send({
             success: true,
@@ -359,12 +368,11 @@ app.get("/post/:id", PartialAuth, (req, res) => __awaiter(void 0, void 0, void 0
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
 // TODO: use transaction
-app.patch("/post/:id/upvote", Auth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.patch("/post/:id/upvote", Auth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.user.id;
         const postId = req.params.id;
@@ -387,7 +395,7 @@ app.patch("/post/:id/upvote", Auth, (req, res) => __awaiter(void 0, void 0, void
         // keep share id
         const updatedPost = yield schemas_1.PostModel.findByIdAndUpdate(postId, { $inc: { upvotes: 1 } }, { new: true });
         if (!updatedPost)
-            throw new NotFoundError("Post not found");
+            throw new utils_1.NotFoundError("Post not found");
         res.send({
             success: true,
             message: "Post upvoted",
@@ -395,12 +403,11 @@ app.patch("/post/:id/upvote", Auth, (req, res) => __awaiter(void 0, void 0, void
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
 // TODO: use transaction
-app.patch("/post/:id/downvote", Auth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.patch("/post/:id/downvote", Auth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.user.id;
         const postId = req.params.id;
@@ -423,7 +430,7 @@ app.patch("/post/:id/downvote", Auth, (req, res) => __awaiter(void 0, void 0, vo
         // keep share id
         const updatedPost = yield schemas_1.PostModel.findByIdAndUpdate(postId, { $inc: { downvotes: 1 } }, { new: true });
         if (!updatedPost)
-            throw new NotFoundError("Post not found");
+            throw new utils_1.NotFoundError("Post not found");
         res.send({
             success: true,
             message: "Post downvoted",
@@ -431,11 +438,10 @@ app.patch("/post/:id/downvote", Auth, (req, res) => __awaiter(void 0, void 0, vo
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
-app.patch("/post/:id/unvote", Auth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.patch("/post/:id/unvote", Auth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         const userId = req.user.id;
         const postId = req.params.id;
@@ -457,12 +463,11 @@ app.patch("/post/:id/unvote", Auth, (req, res) => __awaiter(void 0, void 0, void
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
 // when a post loads it hits this endpoint
-app.post("/share", Auth, (req, res) => __awaiter(void 0, void 0, void 0, function* () {
+app.post("/share", Auth, (req, res, next) => __awaiter(void 0, void 0, void 0, function* () {
     try {
         // m - Medium
         // s- sharerer id
@@ -494,10 +499,10 @@ app.post("/share", Auth, (req, res) => __awaiter(void 0, void 0, void 0, functio
         });
     }
     catch (error) {
-        console.error(error);
-        res.status(500).json({ message: `${error}` });
+        next(error);
     }
 }));
+app.use(utils_1.httpErrorHandler);
 app.listen(port, () => __awaiter(void 0, void 0, void 0, function* () {
     const connectDB = () => __awaiter(void 0, void 0, void 0, function* () {
         try {

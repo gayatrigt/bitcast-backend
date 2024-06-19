@@ -52,11 +52,11 @@
 
 To start the development server, run:
 
-    ```bash
-    npm run dev
-    # or
-    yarn dev
-    ```
+```bash
+npm run dev
+# or
+yarn dev
+```
 
 The server will start on `http://localhost:6900`.
 
@@ -64,11 +64,11 @@ The server will start on `http://localhost:6900`.
 
 To build the project for production, run:
 
-    ```bash
-    npm run build
-    # or
-    yarn build
-    ```
+```bash
+npm run build
+# or
+yarn build
+```
 
 The build output will be in the `dist` directory.
 
@@ -76,11 +76,11 @@ The build output will be in the `dist` directory.
 
 To run the production build locally, run:
 
-    ```bash
-    npm run start
-    # or
-    yarn start
-    ```
+```bash
+npm run start
+# or
+yarn start
+```
 
 ## Learn More
 
